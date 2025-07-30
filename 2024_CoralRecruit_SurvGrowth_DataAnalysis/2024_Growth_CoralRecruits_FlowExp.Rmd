@@ -1,0 +1,556 @@
+---
+title: "2024_Growth12weeks_CoralRecruits_FlowExp"
+author: "Thomas LAVOREL"
+date: "2024-05-02"
+output: html_document
+---
+
+# Importing Libraries
+```{r}
+# Load necessary packages
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(glmmTMB)
+library(brms)
+library(emmeans)
+library(tidybayes)
+library(ggplot2)
+library(bayesplot)
+
+```
+
+# Import and prepare data for analysis (We omit the NA because we are not interested in velocity values without recruits)
+```{r}
+# Load Growth data from an Excel file and select relevant columns
+Growth_FlowExp_data <- readxl::read_excel("2024_Growth_FlowExp.xlsx") %>% 
+  data.frame() %>%  # Convert to data frame
+  dplyr::select("Flume_Nb",             
+                "Position_Width",        
+                "Position_Length",
+                "Positive_Relative_Tissue_Growth_4weeks",
+                "Positive_Relative_Tissue_Growth_7weeks", 
+                "Positive_Relative_Tissue_Growth_12weeks",
+                "Data_Viability")           
+
+# Load Velocity data from an Excel file and select relevant columns
+Velocities_FlowExp_data <- readxl::read_excel("2024_Velocities_FlowExp.xlsx", sheet = "2024_Velocities_FlowExp") %>% 
+  data.frame() %>%  # Convert to data frame
+  dplyr::select("Flume_Nb",             
+                "Position_Width",       
+                "Position_Length",      
+                "Velocity") %>%         
+  mutate(Velocity = as.numeric(Velocity))  
+
+# Merge Growth and Velocity data based on matching Position & Flume number
+GrowthVelocity_data <- merge(Growth_FlowExp_data, Velocities_FlowExp_data, 
+                             by = c("Position_Width", "Position_Length", "Flume_Nb"), 
+                             all.x = TRUE) %>%  # Keep all Growth data even if Velocity is missing
+  na.omit() %>%  # Remove rows with missing values in any column
+  dplyr::filter(Data_Viability != "No")
+
+# Get the number of unique velocity values in the merged dataset
+length(unique(GrowthVelocity_data$Velocity))
+
+# Display structure of the final dataset
+str(GrowthVelocity_data)
+
+# Preview first few rows
+head(GrowthVelocity_data)
+
+# Preview last few rows
+tail(GrowthVelocity_data)
+
+```
+#Pivot the timepoint to melt the data
+```{r}
+GrowthVelocity_data_metled <- GrowthVelocity_data %>%
+  pivot_longer(
+    cols = starts_with("Positive"),
+    names_to = "Timepoint",
+    values_to = "Growth"
+  ) %>%
+  mutate(
+    Timepoint = recode(Timepoint,
+                       "Positive_Relative_Tissue_Growth_4weeks" = "4",
+                       "Positive_Relative_Tissue_Growth_7weeks" = "7",
+                       "Positive_Relative_Tissue_Growth_12weeks" = "12"),
+    Timepoint = as.numeric(Timepoint)
+  )
+GrowthVelocity_data_metled <- GrowthVelocity_data_metled %>%
+  mutate(Coral_Density_per_Flume = case_when(
+    Flume_Nb == 1 ~ 329,
+    Flume_Nb == 2 ~ 210,
+    Flume_Nb == 3 ~ 171)) %>% 
+  print()
+
+GrowthVelocity_data_metled_7weeks <- GrowthVelocity_data_metled %>%
+  mutate(Coral_Density_per_Flume = case_when(
+    Flume_Nb == 1 ~ 329,
+    Flume_Nb == 2 ~ 210,
+    Flume_Nb == 3 ~ 171
+  )) %>%
+  filter(Timepoint == 7)
+
+GrowthVelocity_data_metled_12weeks <- GrowthVelocity_data_metled %>%
+  mutate(Coral_Density_per_Flume = case_when(
+    Flume_Nb == 1 ~ 329,
+    Flume_Nb == 2 ~ 210,
+    Flume_Nb == 3 ~ 171)) %>% 
+  print() %>% 
+  filter(Timepoint == 12)
+```
+
+## Bayesian statistics
+# Model construction
+---------
+
+---------
+
+```{r}
+# 7 weeks
+form1 <- bf(Growth ~ scale(Velocity) + (1 | Flume_Nb), family = Gamma(link = "log"))
+form2 <- bf(Growth ~ scale(Velocity) + (scale(Velocity) | Flume_Nb), family = Gamma(link = "log")) 
+
+# 12 weeks
+form11 <- bf(Growth ~ scale(Velocity) + (1 | Flume_Nb), family = Gamma(link = "log"))
+form12 <- bf(Growth ~ scale(Velocity) + (scale(Velocity) | Flume_Nb), family = Gamma(link = "log")) 
+```
+
+# Priors 
+```{r}
+# 7 weeks
+priors_info_1 <- get_prior(form1, data = GrowthVelocity_data_metled_7weeks)
+priors_info_2 <- get_prior(form2, data = GrowthVelocity_data_metled_7weeks)
+
+#for 12 weeks
+priors_info_11 <- get_prior(form11, data = GrowthVelocity_data_metled_12weeks)
+priors_info_12 <- get_prior(form12, data = GrowthVelocity_data_metled_12weeks)
+
+# Summarize data to inform priors
+summary_stats_7weeks <- GrowthVelocity_data_metled_7weeks %>% 
+  summarise(
+    mean_log = log(mean(Growth)),
+    median_log = log(median(Growth)),
+    sd_log = sd(log(Growth + 0.01))
+  )
+print(summary_stats_7weeks)
+
+summary_stats_12weeks <- GrowthVelocity_data_metled_12weeks %>% 
+  summarise(
+    mean_log = log(mean(Growth)),
+    median_log = log(median(Growth)),
+    sd_log = sd(log(Growth + 0.01))
+  )
+print(summary_stats_12weeks)
+
+# Calculate standard deviation for the priors
+#7 weeks
+sd_growth_log_7weeks <- sd(log(GrowthVelocity_data_metled_7weeks$Growth + 0.01))
+sd_velocity_log_7weeks <- sd(log(GrowthVelocity_data_metled_7weeks$Velocity + 0.01))
+sd_ratio_vel_7weeks <- sd_growth_log_7weeks / sd_velocity_log_7weeks
+
+print(paste("sd_ratio_vel_7weeks ",sd_ratio_vel_7weeks))
+
+#12 weeks
+sd_growth_log_12weeks <- sd(log(GrowthVelocity_data_metled_12weeks$Growth + 0.01))
+sd_velocity_log_12weeks <- sd(log(GrowthVelocity_data_metled_12weeks$Velocity + 0.01))
+sd_ratio_vel_12weeks <- sd_growth_log_12weeks / sd_velocity_log_12weeks
+print(paste("sd_ratio_vel_12weeks ",sd_ratio_vel_12weeks))
+
+
+
+# Define more informative priors based on prior analysis
+
+priors1 <- c(
+    # Intercept: based on your log-growth mean_7weeks (~ -2.1)
+    prior(normal(-2.1, 1), class = "Intercept") +
+    # from sd_ratio_12weeks
+    prior(normal(0, 3), class = "b", coef = "scaleVelocity") +  
+    prior(student_t(3, 0, 4), class = "sd", group = "Flume_Nb") +
+    prior(gamma(2, 0.1), class = "shape")  # gives the model room to estimate shape while anchoring it toward values that keep the Gamma variance under control
+)
+
+# Growth ~ scale(Velocity) + (scale(Velocity) | Flume_Nb) 7 Weeks
+priors2 <- c(
+  prior(normal(-2.1, 1), class = "Intercept"),
+  prior(normal(0, 3), class = "b", coef = "scaleVelocity"),
+  prior(student_t(3, 0, 4), class = "sd", group = "Flume_Nb"),
+  prior(student_t(3, 0, 1), class = "sd", group = "Flume_Nb", coef = "scaleVelocity"),
+  prior(gamma(2, 0.1), class = "shape")
+)
+
+
+# Growth ~ scale(Velocity) + (1 | Flume_Nb) 12 Weeks
+priors11 <- c(
+    # Intercept: based on your log-growth mean_7weeks (~ -2.1)
+    prior(normal(-1.6, 1), class = "Intercept") +
+    # from sd_ratio_12weeks
+    prior(normal(0, 3), class = "b", coef = "scaleVelocity") +  
+    prior(student_t(3, 0, 1), class = "sd", group = "Flume_Nb") +
+    prior(gamma(2, 0.1), class = "shape")  # gives the model room to estimate shape while anchoring it toward values that keep the Gamma variance under control
+)
+
+# Growth ~ scale(Velocity) + (scale(Velocity) | Flume_Nb) 12 Weeks
+priors12 <- c(
+  prior(normal(-1.6, 1), class = "Intercept"),
+  prior(normal(0, 3), class = "b", coef = "scaleVelocity"),
+  prior(student_t(3, 0, 1), class = "sd", group = "Flume_Nb"),
+  prior(student_t(3, 0, 1), class = "sd", group = "Flume_Nb", coef = "scaleVelocity"),
+  prior(gamma(2, 0.1), class = "shape")
+)
+```
+
+#Running the Models
+```{r}
+# Run the Bayesian model
+fit1 <- brm(
+  formula = form1,
+  data = GrowthVelocity_data_metled_7weeks %>%
+    mutate(Growth = ifelse(Growth == 0, 0.01, Growth)),
+  iter = 5000,
+  warmup = 2000,
+  thin = 5,
+  chains = 5,
+  cores = 3,
+  prior = priors1,
+  control = list(adapt_delta = 0.999, max_treedepth = 20),
+)
+save(fit1, file="Growth_Gamma_model_1.RData")
+
+fit2<- brm(
+  formula = form2,
+  data = GrowthVelocity_data_metled_7weeks %>%
+    mutate(Growth = ifelse(Growth == 0, 0.01, Growth)),
+  iter = 5000,
+  warmup = 2000,
+  thin = 5,
+  chains = 5,
+  cores = 3,
+  prior = priors2,
+  control = list(adapt_delta = 0.999, max_treedepth = 20),
+)
+save(fit2, file="Growth_Gamma_model_2.RData")
+
+fit11<- brm(
+  formula = form11,
+  data = GrowthVelocity_data_metled_12weeks %>%
+    mutate(Growth = ifelse(Growth == 0, 0.01, Growth)),
+  iter = 5000,
+  warmup = 2000,
+  thin = 5,
+  chains = 5,
+  cores = 3,
+  prior = priors11,
+  control = list(adapt_delta = 0.999, max_treedepth = 20),
+)
+save(fit11, file="Growth_Gamma_model_11.RData")
+
+fit12<- brm(
+  formula = form12,
+  data = GrowthVelocity_data_metled_12weeks %>%
+    mutate(Growth = ifelse(Growth == 0, 0.01, Growth)),
+  iter = 5000,
+  warmup = 2000,
+  thin = 5,
+  chains = 5,
+  cores = 3,
+  prior = priors12,
+  control = list(adapt_delta = 0.999, max_treedepth = 20),
+)
+save(fit12, file="Growth_Gamma_model_12.RData")
+```
+# Cheking models validity
+```{r}
+load("Growth_Gamma_model_1.RData")
+load("Growth_Gamma_model_2.RData")
+
+load("Growth_Gamma_model_11.RData")
+load("Growth_Gamma_model_12.RData")
+
+
+summary1 <- summary(fit1)
+print(summary1)
+pp_check(fit1)
+pairs(fit1)
+
+summary2 <- summary(fit2)
+print(summary2)
+pp_check(fit2)
+pairs(fit2)
+
+summary11 <- summary(fit11)
+print(summary11)
+pp_check(fit11)
+pairs(fit11)
+
+summary12 <- summary(fit12)
+print(summary12)
+pp_check(fit12)
+pairs(fit12)
+```
+
+
+```{r}
+# Model Result Summary
+summary1
+summary2
+summary11
+summary12
+
+
+```
+
+
+# Cross validation
+```{r}
+loo1 <- loo(fit1)
+loo1 
+loo2 <- loo(fit2)
+loo2
+loo11 <- loo(fit11)
+loo11
+loo12 <- loo(fit12)
+loo12
+loo_compare(loo1,loo2)
+loo_compare(loo11,loo12)
+```
+# fit2 is the better model, Growth ~ scale(Velocity) + scale(scale(Velocity) | Flume_Nb) for 7 weeks
+# fit12 is the better model, Growth ~ scale(Velocity) + scale(scale(Velocity) | Flume_Nb) for 12 weeks
+------------
+Although the Model 2  and 12 with flume-specific slopes provided slightly better predicitive performance, we retained the random-intercept model for reference, as flow velocity did not significantly vary across the flumes 
+------------
+# Calculating the median, CI and plausibility of pourcentage of change in relative growth between 5 and 20 cm s-1 for 7 weeks and 12 weeks, from the posteriors
+```{r}
+# Gives the median, upper and lower values of the predicted % of change, giving also the exceedance probability 7 weeks
+MinMax_7weeks <- with(GrowthVelocity_data_metled_7weeks, list(Velocity=c(min(Velocity),max(Velocity))))
+
+pred_7weeks <- emmeans(fit1,~Velocity,at=MinMax_7weeks, type="link") %>% 
+  gather_emmeans_draws() %>% 
+  group_by(.draw) %>% 
+  summarise(.value= exp(diff(.value))) %>% 
+  summarise_draws(median,HDInterval::hdi,
+                  p=~mean(.x>1))
+pred_7weeks
+
+bayes_R2(fit1)
+
+# Gives the median, upper and lower values of the predicted % of change, giving also the exceedance probability 12 weeks
+MinMax_12weeks <- with(GrowthVelocity_data_metled_12weeks, list(Velocity=c(min(Velocity),max(Velocity))))
+pred_12weeks <- emmeans(fit11,~Velocity,at=MinMax_12weeks, type="link") %>% 
+  gather_emmeans_draws() %>% 
+  group_by(.draw) %>% 
+  summarise(.value= exp(diff(.value))) %>% 
+  summarise_draws(median,HDInterval::hdi,
+                  p=~mean(.x>1))
+pred_12weeks
+
+bayes_R2(fit11)
+```
+# Calculating the median, CI and plausibility of change in relative growth between 5 and 20 cm s-1 for 7 weeks and 12 weeks, from the posteriors
+
+```{r}
+Relative_growth_Change_pred_7weeks_bis <- emmeans(fit1,~Velocity,at=MinMax_7weeks, type="link") %>% 
+  gather_emmeans_draws() %>% 
+  group_by(.draw) %>% 
+  summarise(.value= diff(exp(.value))) %>% 
+  summarise_draws(median,HDInterval::hdi,
+                  p=~mean(.x>0))
+Relative_growth_Change_pred_7weeks_bis
+
+Relative_growth_Change_pred_12weeks_bis <- emmeans(fit11,~Velocity,at=MinMax_12weeks, type="link") %>% 
+  gather_emmeans_draws() %>% 
+  group_by(.draw) %>% 
+  summarise(.value= diff(exp(.value))) %>% 
+  summarise_draws(median,HDInterval::hdi,
+                  p=~mean(.x>0))
+Relative_growth_Change_pred_12weeks_bis
+```
+
+```{r}
+pred_12weeks_bis_bis <- emmeans(fit1,~Velocity,at=MinMax_12weeks, type="link") %>% 
+  gather_emmeans_draws() %>% 
+  group_by(.draw) %>% 
+  summarise(.value= diff(exp(.value)))
+
+pred_7weeks_bis_bis <- emmeans(fit11,~Velocity,at=MinMax_7weeks, type="link") %>% 
+  gather_emmeans_draws() %>% 
+  group_by(.draw) %>% 
+  summarise(.value= diff(exp(.value)))
+
+diff12_7weeks <- data.frame(WK12 = pred_12weeks_bis_bis$.value, WK7 = pred_7weeks_bis_bis$.value) %>% 
+  mutate(diff = WK7 -WK12) %>% 
+  select(diff) %>% 
+  summarise_draws(median,HDInterval::hdi,
+                  p=~mean(.x>0))
+diff12_7weeks
+```
+
+
+# Plotting 
+# Step 1: Setup prediction data 
+```{r}
+# Create a sequence of raw Velocity values to be scaled internally by brms
+Velocity_sequence <- tibble(
+  Velocity = seq(min(GrowthVelocity_data_metled_12weeks$Velocity),
+                 max(GrowthVelocity_data_metled_12weeks$Velocity),
+                 length.out = 100)  # Hold constant
+)
+
+# Predict survival probabilities using fit1
+fitted_pred_7weeks <- fitted(fit1, 
+                       newdata = Velocity_sequence,
+                       scale = "response",    
+                       re_formula = NA          
+                       ) %>%
+  as_tibble() %>%
+  bind_cols(Velocity_sequence)
+
+ggplot(fitted_pred_7weeks, aes(x = Velocity, y = Estimate)) +
+  geom_line(color = "#1D3557", linewidth = 1.2) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, fill = "#457B9D") +
+  labs(
+    x = "Velocity (cm/s)",
+    y = "Posterior Relative Growth",
+    title = "Posterior relative coral recruit growth vs. flow velocity",
+  ) +
+  theme_minimal(base_size = 14)
+
+# Predict survival probabilities using fit11
+
+
+fitted_pred_12weeks <- fitted(fit11, 
+                       newdata = Velocity_sequence,
+                       scale = "response",    
+                       re_formula = NA          
+                       ) %>%
+  as_tibble() %>%
+  bind_cols(Velocity_sequence)
+
+
+ggplot(fitted_pred_12weeks, aes(x = Velocity, y = Estimate)) +
+  geom_line(color = "#1D3557", linewidth = 1.2) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, fill = "#457B9D") +
+  labs(
+    x = "Velocity (cm/s)",
+    y = "Posterior Relative Growth",
+    title = "Posterior relative coral recruit growth vs. flow velocity",
+  ) +
+  theme_minimal(base_size = 14)
+```
+# Plot predictions
+
+```{r}
+# Plot predictions 7 weeks
+FlumeNumber <- c(1,2,3)
+ggplot(fitted_pred_7weeks, aes(x = Velocity, y = Estimate*100 + 100)) +
+  
+  geom_point(data = GrowthVelocity_data_metled_7weeks,
+             aes(x = Velocity, y = Growth*100 + 100,
+                 color = factor(Flume_Nb)),
+             size = 2, alpha = 0.6) +
+  scale_color_manual(values = c("#35978f", "#CAB77E", "#B284BF"),
+                     labels = FlumeNumber) +
+  scale_fill_manual(values = c("#35978f", "#CAB77E", "#B284BF"),
+                    labels = FlumeNumber) +
+  
+  geom_line(color= "#1D3557",linewidth = 1.2) +
+  geom_ribbon(aes(ymin = Q2.5*100 + 100, ymax = Q97.5*100 + 100), alpha = 0.2, fill = "#457B9D") +
+  labs(
+    title = "Predicted 7 week Growth (Relative tissue change) Change vs. Velocity by Density",
+    x = "Velocity (cm/s)",
+    y = "Predicted 7 week Growth (Relative tissue change) Change",
+    color = "Flume_Nb",
+    fill = "Flume_Nb"
+  )  +
+  coord_cartesian(ylim = c(100, 150)) +
+  theme_minimal(base_size = 14)
+
+# Plot predictions 12 weeks
+FlumeNumber <- c(1,2,3)
+ggplot(fitted_pred_12weeks, aes(x = Velocity, y = Estimate*100 + 100)) +
+  
+  geom_point(data = GrowthVelocity_data_metled_12weeks,
+             aes(x = Velocity, y = Growth*100 + 100,
+                 color = factor(Flume_Nb)),
+             size = 2, alpha = 0.6) +
+  scale_color_manual(values = c("#35978f", "#CAB77E", "#B284BF"),
+                     labels = FlumeNumber) +
+  scale_fill_manual(values = c("#35978f", "#CAB77E", "#B284BF"),
+                    labels = FlumeNumber) +
+  
+  geom_line(color= "#1D3557",linewidth = 1.2) +
+  geom_ribbon(aes(ymin = Q2.5*100 + 100, ymax = Q97.5*100 + 100), alpha = 0.2, fill = "#457B9D") +
+  labs(
+    title = "Predicted 12 week Growth (Relative tissue change) Change vs. Velocity by Density",
+    x = "Velocity (cm/s)",
+    y = "Predicted 12 week Growth (Relative tissue change) Change",
+    color = "Flume_Nb",
+    fill = "Flume_Nb"
+  )  +
+  coord_cartesian(ylim = c(100, 150)) +
+  theme_minimal(base_size = 14)
+```
+# Graphical representation comparing posteriors for min and max velocities
+```{r}
+# Define velocity range for predictions
+velocity_range <- range(SurvivalvsFlow_Data_12weeks$Velocity)
+
+# Get posterior draws on response scale
+draws_df <- emmeans(fit1, ~Velocity, at = list(Velocity = velocity_range), type = "response") %>%
+  gather_emmeans_draws() %>%
+  mutate(pred_growth = exp(.value))  # Convert from exp to relative growth
+
+# Summarise mean and 95% HDI
+summary_df <- draws_df %>%
+  group_by(Velocity) %>%
+  summarise(
+    median_growth = med(pred_growth),
+    lower = HDInterval::hdi(pred_growth)[1],
+    upper = HDInterval::hdi(pred_growth)[2]
+  )
+
+# Define colors for each velocity level
+colors <- c("#E63946", "#457B9D")
+names(colors) <- sort(unique(summary_df$Velocity))
+
+# Plot with mean survival value as label
+ggplot(draws_df, aes(x = pred_growth, fill = factor(Velocity), color = factor(Velocity))) +
+  geom_density(alpha = 0.3) +
+  geom_vline(data = summary_df, aes(xintercept = mean_growth, color = factor(Velocity)), size = 1.2) +
+  geom_text(data = summary_df,
+            aes(x = mean_growth -0.035, y = 40,  # adjust y to position the text appropriately
+                label = sprintf("%.3f", mean_growth),
+                color = factor(Velocity)),
+            hjust = 0.5, size = 5, show.legend = FALSE) +
+  scale_fill_manual(values = colors) +
+  scale_color_manual(values = colors) +
+  coord_cartesian(xlim = c(0, 0.5)) +
+  labs(
+    x = "Posterior Relative Growth Change",
+    y = "Density",
+    fill = "Survival estimates at 
+    different velocities (cm/s)",
+    color = "Mean survival at 
+    different velocities (cm/s)",
+    title = "Posterior Relative Growth Change Estimates at Extreme Velocities with 95% HPD Intervals"
+  ) +
+  theme_minimal(base_size = 14)
+```
+```{r}
+ratio_draws <- emmeans(fit1, ~ Velocity, at = MinMax_7weeks, type = "link") %>%
+  gather_emmeans_draws() %>%
+  group_by(.draw) %>%
+  summarise(relative_change = exp(diff(.value)))  # Growth ratio
+
+ggplot(ratio_draws, aes(x = (relative_change * 100) - 100)) +
+  geom_histogram(binwidth = 5, fill = "lightblue", color = "white", boundary = 0) +
+  geom_vline(xintercept = 0, color = "#D81B60", linetype = "dashed", size = 1) +
+  labs(
+    title = "Posterior Distribution of Relative Growth Change",
+    x = "Relative Growth Change (%)",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 14)
+```
+

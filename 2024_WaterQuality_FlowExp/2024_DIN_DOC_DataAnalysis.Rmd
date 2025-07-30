@@ -1,0 +1,74 @@
+---
+title: "2024_DIN_DOC_DataAnalysis"
+author: "Thomas LAVOREL"
+date: "2025-06-10"
+output: html_document
+---
+
+# Importing library
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(lubridate)
+library(stringr)
+
+```
+
+# Importing the water quality data
+```{r}
+DIN_data <- read_xlsx("2024_DIN_DOC_FlowExp.xlsx", sheet = "DIN")
+DOC_data <- read_xlsx("2024_DIN_DOC_FlowExp.xlsx", sheet = "DOC")
+str(DIN_data)
+str(DOC_data)
+```
+
+# Filtering the data and exploration
+```{r}
+Nutrient_data_clean <- DIN_data %>%
+  mutate(across(-`Sample ID`, clean_numeric)) %>%
+  mutate(Tank_ID = str_extract(`Sample ID`, "HEX\\d"))  # Extract HEX1, HEX2, etc.
+
+# Summary by Tank
+Nutrient_data_clean %>%
+  group_by(Tank_ID) %>%
+  summarise(across(where(is.numeric),
+                   list(mean = ~mean(., na.rm = TRUE),
+                        sd = ~sd(., na.rm = TRUE)),
+                   .names = "{.col}_{.fn}")) %>%
+  print()
+
+DOC_data_clean <- DOC_data %>%
+  mutate(across(-`Sample ID`, clean_numeric)) %>%
+  mutate(Tank_ID = str_extract(`Sample ID`, "HEX\\d"))
+
+# Summary by Tank
+DOC_data_clean %>%
+  group_by(Tank_ID) %>%
+  summarise(across(where(is.numeric),
+                   list(mean = ~mean(., na.rm = TRUE),
+                        sd = ~sd(., na.rm = TRUE)),
+                   .names = "{.col}_{.fn}")) %>%
+  print()
+
+
+```
+
+# Filtering the data and exploration
+```{r}
+# Example: Plot NO3 from Nutrient dataset
+ggplot(Nutrient_data_clean, aes(x = Tank_ID, y = `NO3 (µmol/L)`, color = Tank_ID)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(title = "NO3 Levels by Tank", x = "Tank ID", y = "NO3 (µmol/L)") +
+  theme_minimal()
+
+# Example: Plot DOC from DOC dataset
+ggplot(DOC_data_clean, aes(x = Tank_ID, y = `DOC (mg/L)`, color = Tank_ID)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(title = "DOC Concentration by Tank", x = "Tank ID", y = "DOC (mg/L)") +
+  theme_minimal()
+
+```

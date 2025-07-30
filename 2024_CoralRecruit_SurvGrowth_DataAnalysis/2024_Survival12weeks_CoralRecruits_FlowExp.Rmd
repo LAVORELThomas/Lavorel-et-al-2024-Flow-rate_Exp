@@ -1,0 +1,424 @@
+---
+title: "2024_Survival12weeks_CoralRecruits_FlowExp"
+author: "Thomas LAVOREL"
+date: "2025-03-23"
+output: html_document
+---
+
+
+```{r}
+# Load necessary packages
+library(readxl)
+library(dplyr)
+library(brms)
+library(emmeans)
+library(tidybayes)
+library(ggplot2)
+library(bayesplot)
+library(tidyr)
+```
+
+```{r}
+# Load survival data
+SurvivalvsFlow_Data <- read_excel("2024_melted_SurvivalvsFlow_Data.xlsx")
+
+# Explore structure
+str(SurvivalvsFlow_Data)
+
+```
+# Preliminary exploratory data analysis
+```{r}
+SurvivalvsFlow_Data <- SurvivalvsFlow_Data %>%
+  group_by(Flume_Nb) %>%
+  mutate(Flume_Density = n()/3) %>% 
+  mutate(All_neighbours = close_neighbours+spatial_neighbours)
+# Exploration of recruits data
+summary_survival_table <- SurvivalvsFlow_Data %>%
+  group_by(Flume_Nb) %>%
+  summarise(
+    n_recruits = n()/3,
+    n_dead_7weeks = sum(surv == 0 & timepoint_weeks == 7, na.rm = TRUE),
+    n_dead_12weeks = sum(surv == 0 & timepoint_weeks == 12, na.rm = TRUE),
+    mean_surv = mean(surv, na.rm = TRUE),
+    sd_surv = sd(surv, na.rm = TRUE),
+    median_surv = median(surv, na.rm = TRUE)
+  )
+survival_7weeks_df <- SurvivalvsFlow_Data %>%
+  filter(timepoint_weeks == 7) %>%
+  mutate(surv_7weeks = ind / ind_t0)
+
+# Exploration of velocity data
+velocity_summary <- SurvivalvsFlow_Data %>%
+  group_by(Flume_Nb) %>%
+  summarise(
+    mean_velocity = mean(Velocity, na.rm = TRUE),
+    sd_velocity = sd(Velocity, na.rm = TRUE),
+    median_velocity = median(Velocity, na.rm = TRUE)
+  )
+
+# Calculate survival at 7 weeks (ind / ind_t0 at timepoint 7)
+overall_surv_7weeks <- SurvivalvsFlow_Data %>%
+  filter(timepoint_weeks == 7) %>%
+  mutate(surv_7weeks = ind / ind_t0) %>%
+  summarise(
+    mean_surv_7weeks = mean(surv_7weeks, na.rm = TRUE),
+    sd_surv_7weeks = sd(surv_7weeks, na.rm = TRUE),
+    median_surv_7weeks = median(surv_7weeks, na.rm = TRUE)
+  )
+
+# Combine with overall 12-week survival stats
+overall_survival_stats <- SurvivalvsFlow_Data %>%
+  summarise(
+    mean_surv_12weeks = mean(surv, na.rm = TRUE),
+    sd_surv_12weeks = sd(surv, na.rm = TRUE),
+    median_surv_12weeks = median(surv, na.rm = TRUE)
+  ) %>%
+  bind_cols(overall_surv_7weeks)
+
+
+print(overall_survival_stats)
+print(summary_survival_table)
+print(velocity_summary)
+```
+# Investigate Neighbours and Flow Velocity
+```{r}
+ggplot(SurvivalvsFlow_Data, aes(x = Velocity, y = close_neighbours)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  theme_minimal() +
+  labs(title = "Relationship between Velocity and Close Neighbours")
+
+ggplot(SurvivalvsFlow_Data, aes(x = Velocity, y = spatial_neighbours)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  theme_minimal() +
+  labs(title = "Relationship between Velocity and spatial_neighbours")
+
+ggplot(SurvivalvsFlow_Data, aes(x = Velocity, y = spatial_neighbours + close_neighbours)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", color = "green", se = FALSE) +
+  theme_minimal() +
+  labs(title = "Relationship between Velocity and all_neighbours")
+
+# Create the all_neighbours variable
+SurvivalvsFlow_Data$all_neighbours <- SurvivalvsFlow_Data$spatial_neighbours + SurvivalvsFlow_Data$close_neighbours
+
+# Fit the linear model
+model <- lm(all_neighbours ~ Velocity, data = SurvivalvsFlow_Data)
+
+# View the summary of the model
+summary(model)
+```
+
+# Exploratory plot
+```{r}
+# Mean survival over time
+ggplot(SurvivalvsFlow_Data, aes(x = timepoint_weeks, y = surv)) +
+  stat_summary(fun = mean, geom = "line", group = 1, color = "blue") +
+  labs(title = "Mean Survival Over Time", x = "Weeks", y = "Mean Survival") +
+  theme_minimal()
+
+# Survival x flow velocity, factor : Flume
+ggplot(SurvivalvsFlow_Data, aes(x = Velocity, y = surv, color = factor(Flume_Nb))) +
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5) +
+  labs(title = "Survival vs Velocity by Flume",
+       x = "Velocity", y = "Survival", color = "Flume") +
+  theme_minimal()
+
+#Violon plot survival per flume
+ggplot(SurvivalvsFlow_Data, aes(x = factor(Flume_Nb), y = surv, fill = factor(Flume_Nb))) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  geom_jitter(width = 0.15, height = 0, alpha = 0.2) +
+  labs(title = "Violin Plot of Survival per Flume",
+       x = "Flume", y = "Survival") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+```
+# Bayesian model using brms
+```{r}
+# Filter data to timepoint of interest (week 12)
+SurvivalvsFlow_Data_12weeks <- subset(SurvivalvsFlow_Data, timepoint_weeks == 12)
+
+# Model formula
+form1 <- bf(surv ~ scale(Velocity) + (1 | Flume_Nb), family = bernoulli(link= logit)) 
+form2 <- bf(surv ~ scale(Velocity) + (scale(Velocity) | Flume_Nb), family = bernoulli(link= logit)) 
+
+```
+
+# Priors
+```{r}
+priors_info_1 <- get_prior(form1, data = SurvivalvsFlow_Data_12weeks)
+priors_info_2 <- get_prior(form2, data = SurvivalvsFlow_Data_12weeks)
+
+# Summarize data to inform priors
+summary_stats_7weeks <- SurvivalvsFlow_Data_12weeks %>% 
+  summarise(
+    mean_log = (mean(surv)),
+    median_log = (median(surv)),
+    sd_log = sd((surv + 0.01))
+  )
+print(summary_stats_7weeks)
+
+prior1 <- c(
+  prior(normal(logit(0.95), 1), class = "Intercept") ,
+  prior(normal(0, 0.5), class = "b", coef = "scaleVelocity"),           
+  prior(student_t(3, 0, 1), class = "sd")
+)
+
+prior2 <- c(
+  prior(normal(logit(0.95), 1), class = "Intercept"),
+  prior(normal(0, 0.5), class = "b", coef = "scaleVelocity"),
+  prior(exponential(2), class = "sd"),
+  prior(lkj(2), class = "cor")
+)
+```
+
+# Checking prior predictive distributions
+```{r}
+# Checking the validity of the prior by comparing the posterior distribution only from the priors to the actual dataset
+prior1_fit <- brm(
+  surv ~ scale(Velocity) + (1 | Flume_Nb),
+  data = SurvivalvsFlow_Data_12weeks,
+  family = bernoulli(),
+  prior = prior1,
+  sample_prior = "only",
+  chains = 4,
+  iter = 2000,
+  seed = 123
+)
+summary(prior1_fit)
+pp_check(prior1_fit)
+```
+
+# Run brms, after priors selection
+```{r}
+fit1 <- brm(
+  formula = form1,
+  data = SurvivalvsFlow_Data_12weeks,
+  prior = prior1,
+  control = list(adapt_delta = 0.999),
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+)
+save(fit1, file = "Survival_Bernoulli_model_1.RData")
+
+fit2 <- brm(
+  formula = form2,
+  data = SurvivalvsFlow_Data_12weeks,
+  prior = prior2,
+  control = list(adapt_delta = 0.999),
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+)
+save(fit2, file = "Survival_Bernoulli_model_2.RData")
+```
+
+# Result of the prior and model verification
+```{r}
+load("Survival_Bernoulli_model_1.RData")
+load("Survival_Bernoulli_model_2.RData")
+
+summary1 <- summary(fit1)
+print(summary1)
+pp_check(fit1)
+pairs(fit1)
+
+summary2 <- summary(fit2)
+print(summary2)
+pp_check(fit2)
+pairs(fit2)
+```
+# Model comparaison & cross validation
+```{r}
+loo1 <- loo(fit1)
+loo2 <- loo(fit2)
+
+
+loo_compare(loo1,loo2)
+```
+
+
+------------
+Although the Model 2 with flume-specific slopes provided slightly better predicitive performance, we retained the random-intercept model for reference, as flow velocity did not significantly vary across the flumes 
+------------
+# Model confirmed, exploration of the results and plot
+```{r}
+# Gives the median, upper and lower values of the predicted % of change, giving also the exceedance probability 12 weeks
+# Velocity min max 
+MinMax_12weeks <- with(SurvivalvsFlow_Data_12weeks, list(Velocity=c(min(Velocity),max(Velocity))))
+
+# Get posterior draws on response scale
+pred_12weeks <- emmeans(fit1, ~Velocity, at = MinMax_12weeks, type = "response") %>%
+  gather_emmeans_draws() %>%
+  mutate(pred_surv = plogis(.value))  # Convert from logit to probability
+
+# Summarise mean and 95% HDI
+summary_pred_12weeks <- pred_12weeks %>%
+  group_by(Velocity) %>%
+  summarise(
+    mean_surv = mean(pred_surv),
+    lower = HDInterval::hdi(pred_surv)[1],
+    upper = HDInterval::hdi(pred_surv)[2]
+  )
+summary_pred_12weeks
+
+# Summarise mean of diff and 95% HDI 
+diff_pred_12weeks <- emmeans(fit1,~Velocity,at=MinMax_12weeks, type="response") %>% 
+  gather_emmeans_draws() %>% 
+  group_by(.draw) %>% 
+  mutate(.value = plogis(.value)) %>% 
+  summarise(.value=diff(.value)) %>% 
+  summarise_draws(median,HDInterval::hdi,
+                  p=~mean(.x<0))
+diff_pred_12weeks
+
+
+MinMax_12weeks <- with(SurvivalvsFlow_Data_12weeks, list(Velocity=c(min(Velocity),max(Velocity))))
+
+bayes_R2(fit1)
+```
+
+```{r}
+
+# Create a sequence of raw Velocity values to be scaled internally by brms
+Velocity_sequence <- tibble(
+  Velocity = seq(min(SurvivalvsFlow_Data_12weeks$Velocity),
+                 max(SurvivalvsFlow_Data_12weeks$Velocity),
+                 length.out = 100)  # Hold constant
+)
+
+# Predict survival probabilities using fit2
+fitted_probs <- fitted(fit1, 
+                       newdata = Velocity_sequence,
+                       scale = "response",      # Get probabilities, not logits
+                       re_formula = NA          # Population-level effects only
+                       ) %>%
+  as_tibble() %>%
+  bind_cols(Velocity_sequence)
+
+
+ggplot(fitted_probs, aes(x = Velocity, y = Estimate)) +
+  geom_line(color = "#1D3557", linewidth = 1.2) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, fill = "#457B9D") +
+  labs(
+    x = "Velocity (cm/s)",
+    y = "Posterior survival probability",
+    title = "Posterior Coral Survival vs Flow Velocity",
+  ) +
+  theme_minimal(base_size = 14)
+
+FlumeNumber <- c(1,2,3)
+ggplot(fitted_probs, aes(x = Velocity, y = Estimate)) +
+  geom_point(data = SurvivalvsFlow_Data_12weeks,
+             aes(x = Velocity, y = surv,
+                 color = factor(Flume_Nb)),
+             size = 2, alpha = 0.6) +
+  scale_color_manual(values = c("#35978f", "#CAB77E", "#B284BF"),
+                     labels = FlumeNumber) +
+  scale_fill_manual(values = c("#35978f", "#CAB77E", "#B284BF"),
+                    labels = FlumeNumber) +
+  geom_line(color = "#1D3557", linewidth = 1.2) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, fill = "#457B9D") +
+  labs(
+    x = "Velocity (cm/s)",
+    y = "Posterior survival probability",
+    title = "Posterior Coral Survival vs Flow Velocity",
+    color = "Flume_Nb",
+    fill = "Flume_Nb"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+
+# Plotting posteriors density at Min and Max comparaison, with mean
+
+```{r}
+# Define colors for each velocity level
+colors <- c("#E63946", "#457B9D")
+names(colors) <- sort(unique(summary_df$Velocity))
+
+# Plot with mean survival value as label
+ggplot(pred_12weeks, aes(x = pred_surv, fill = factor(Velocity), color = factor(Velocity))) +
+  geom_density(alpha = 0.3) +
+  geom_vline(data = summary_pred_12weeks, aes(xintercept = mean_surv, color = factor(Velocity)), size = 1.2) +
+  geom_text(data = summary_pred_12weeks,
+            aes(x = mean_surv -0.035, y = 40,  # adjust y to position the text appropriately
+                label = sprintf("%.3f", mean_surv),
+                color = factor(Velocity)),
+            hjust = -0.1, size = 5, show.legend = FALSE) +
+  scale_fill_manual(values = colors) +
+  scale_color_manual(values = colors) +
+  coord_cartesian(xlim = c(0.8, 1)) +
+  labs(
+    x = "Predicted survival responses ",
+    y = "Density",
+    fill = "Survival estimates at 
+    different velocities (cm/s)",
+    color = "Mean survival at 
+    different velocities (cm/s)",
+    title = "Posterior Survival Estimates at Extreme Velocities with 95% HPD Intervals"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+# Define min/max velocity values
+velocity_range <- range(SurvivalvsFlow_Data_12weeks$Velocity)
+
+# Get flume numbers
+flumes <- sort(unique(SurvivalvsFlow_Data_12weeks$Flume_Nb))
+
+# Step 1 — Make a prediction grid for min/max velocity per flume
+newdata <- expand.grid(
+  Velocity = velocity_range,
+  Flume_Nb = unique(SurvivalvsFlow_Data_12weeks$Flume_Nb)
+) %>%
+  mutate(
+    Velocity = as.numeric(Velocity),  # ensure numeric
+    Flume_Nb = as.factor(Flume_Nb)    # match model class if necessary
+  )
+
+# Step 2 — Add posterior expected predictions (includes random effects)
+draws_df <- add_epred_draws(fit1, newdata = newdata, re_formula = NULL) %>%
+  mutate(pred_surv = .epred)
+
+# Step 3 — Summarise
+summary_df <- draws_df %>%
+  group_by(Flume_Nb, Velocity) %>%
+  summarise(
+    mean_surv = mean(pred_surv),
+    lower = HDInterval::hdi(pred_surv)[1],
+    upper = HDInterval::hdi(pred_surv)[2],
+    .groups = "drop"
+  )
+# Plot
+ggplot(draws_df, aes(x = pred_surv, fill = factor(Velocity), color = factor(Velocity))) +
+  geom_density(alpha = 0.3) +
+  geom_vline(data = summary_df, aes(xintercept = mean_surv, color = factor(Velocity)), size = 1) +
+  geom_text(data = summary_df,
+            aes(x = mean_surv - 0.035, y = 40, label = sprintf("%.3f", mean_surv)),
+            color = "black", hjust = -0.1, size = 4, show.legend = FALSE) +
+  facet_wrap(~ Flume_Nb) +
+  scale_fill_manual(values = c("#E63946", "#457B9D")) +
+  scale_color_manual(values = c("#E63946", "#457B9D")) +
+  coord_cartesian(xlim = c(0.8, 1)) +
+  labs(
+    x = "Predicted survival probability",
+    y = "Density",
+    fill = "Velocity (cm/s)",
+    color = "Velocity (cm/s)",
+    title = "Posterior survival estimates at min/max velocity for each flume"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+```

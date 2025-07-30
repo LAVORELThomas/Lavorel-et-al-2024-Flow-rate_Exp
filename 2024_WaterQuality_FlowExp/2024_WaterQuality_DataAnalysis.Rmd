@@ -1,0 +1,104 @@
+---
+title: "2024_WaterQuality_Analysis"
+author: "Thomas LAVOREL"
+date: "2024-05-22"
+output: html_document
+---
+# Importing library
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(lubridate)
+
+```
+
+# Importing the water quality data
+```{r}
+WaterQuality_data <- read_xlsx("2024_Waterquality_FlowExp.xlsx",sheet = "2024_WaterQuality")
+str(WaterQuality_data)
+```
+
+# Filtering the data and exploration
+```{r}
+WaterQuality_data <- WaterQuality_data %>%
+  mutate(
+    `Temp. (°C)` = as.numeric(`Temp. (°C)`),
+    `DO (mg/l)` = as.numeric(`DO (mg/l)`),
+    Salinity = as.numeric(Salinity),
+    pH = as.numeric(pH)
+  )
+
+# Per Tank summary
+per_tank_summary <- WaterQuality_data %>%
+  group_by(`Tank ID`) %>%
+  summarise(
+    mean_temp = mean(`Temp. (°C)`, na.rm = TRUE),
+    sd_temp = sd(`Temp. (°C)`, na.rm = TRUE),
+    mean_DO = mean(`DO (mg/l)`, na.rm = TRUE),
+    sd_DO = sd(`DO (mg/l)`, na.rm = TRUE),
+    mean_salinity = mean(Salinity, na.rm = TRUE),
+    sd_salinity = sd(Salinity, na.rm = TRUE),
+    mean_ph = mean(pH, na.rm = TRUE),
+    sd_ph = sd(pH, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Overall mean summary (no Tank ID)
+overall_mean <- WaterQuality_data %>%
+  summarise(
+    `Tank ID` = "Mean",
+    mean_temp = mean(`Temp. (°C)`, na.rm = TRUE),
+    sd_temp = sd(`Temp. (°C)`, na.rm = TRUE),
+    mean_DO = mean(`DO (mg/l)`, na.rm = TRUE),
+    sd_DO = sd(`DO (mg/l)`, na.rm = TRUE),
+    mean_salinity = mean(Salinity, na.rm = TRUE),
+    sd_salinity = sd(Salinity, na.rm = TRUE),
+    mean_ph = mean(pH, na.rm = TRUE),
+    sd_ph = sd(pH, na.rm = TRUE)
+  )
+
+# Combine and print
+bind_rows(per_tank_summary, overall_mean) %>%
+  print()
+```
+
+# Filtering the data and exploration
+```{r}
+
+# Ensure Date column is in Date format
+WaterQuality_data <- WaterQuality_data %>%
+  mutate(Date = ifelse(grepl("^\\d{2}/\\d{2}/\\d{4}$", Date),
+                       dmy(Date),
+                       as.Date(as.numeric(Date), origin = "1899-12-30"))) %>%
+  mutate(Date = as.Date(Date))  # ensure proper Date class
+
+# Create individual plots
+p1 <- ggplot(WaterQuality_data, aes(x = Date, y = `Temp. (°C)`, color = `Tank ID`)) +
+  geom_line() +
+  labs(title = "Temperature Over Time", x = "Date", y = "Temperature (°C)") +
+  theme_minimal()
+
+p2 <- ggplot(WaterQuality_data, aes(x = Date, y = `DO (mg/l)`, color = `Tank ID`)) +
+  geom_line() +
+  labs(title = "Dissolved Oxygen Over Time", x = "Date", y = "Dissolved Oxygen (mg/L)") +
+  theme_minimal()
+
+p3 <- ggplot(WaterQuality_data, aes(x = Date, y = Salinity, color = `Tank ID`)) +
+  geom_line() +
+  labs(title = "Salinity Over Time", x = "Date", y = "Salinity (PSU)") +
+  theme_minimal()
+
+p4 <- ggplot(WaterQuality_data, aes(x = Date, y = pH, color = `Tank ID`)) +
+  geom_line() +
+  labs(title = "pH Over Time", x = "Date", y = "pH") +
+  theme_minimal()
+
+# Combine the plots into one figure
+combined_plot <- grid.arrange(p1, p2, p3, p4, ncol = 1)
+
+# Save the combined plot to a file
+ggsave("environmental_parameters_over_time.png", plot = combined_plot, width = 8, height = 12)
+
+```

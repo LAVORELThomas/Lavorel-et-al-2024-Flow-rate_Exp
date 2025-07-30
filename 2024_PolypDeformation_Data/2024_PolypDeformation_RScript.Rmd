@@ -1,0 +1,91 @@
+---
+title: "2024_PolypDeformation_RScript"
+author: "Thomas LAVOREL"
+date: "2024-05-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readxl)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+```
+
+# Importing Data
+```{r}
+PolypDeformation_data <- read_excel("2024_PolypDeformation.xlsx", sheet = "2024_PolypDeformation") %>%
+  mutate(
+    Velocity = as.numeric(Velocity),
+    Recruit_Nb = as.numeric(Recruit_Nb),
+    Status = factor(Status, levels = c("Retracted", "Partially", "Open"))
+  )
+```
+
+#Data Exploration
+
+```{r}
+# Calculate proportions manually
+status_summary <- PolypDeformation_data %>%
+  group_by(Recruit_Nb, Status) %>%
+  summarise(Count = n()) %>%
+  group_by(Recruit_Nb) %>%
+  mutate(Proportion = Count / sum(Count))
+
+# Plot
+ggplot(status_summary, aes(x = factor(Recruit_Nb), y = Proportion, fill = Status)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Proportion of Polyp Status by Recruit Number",
+    x = "Recruit Number",
+    y = "Proportion",
+    fill = "Polyp Status"
+  ) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme_minimal() +
+  guides(fill = guide_legend(reverse = TRUE))
+```
+```{r}
+ggplot(PolypDeformation_data, aes(x = Status, y = Velocity, fill = Status)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Velocity Distribution by Polyp Status",
+    x = "Polyp Status",
+    y = "Velocity (cm/s)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+# Simple analysis via remanipulated data
+```{r}
+PolypDeformation_data2 <- read_excel("2024_PolypDeformation.xlsx", sheet = "2024_PolypDeformation_data2")
+
+# Calculate means and standard deviations
+PartialRetracting_Mean <- mean(PolypDeformation_data2$Partially_Retracted, na.rm = TRUE)
+PartialRetracting_SD <- sd(PolypDeformation_data2$Partially_Retracted, na.rm = TRUE)
+
+Retracting_Mean <- mean(PolypDeformation_data2$Fully_Retracted, na.rm = TRUE)
+Retracting_SD <- sd(PolypDeformation_data2$Fully_Retracted, na.rm = TRUE)
+
+# Display results
+PartialRetracting_Mean
+PartialRetracting_SD
+Retracting_Mean
+Retracting_SD
+```
+
+# Test 
+```{r}
+PolypDeformation_data3 <- PolypDeformation_data2 %>%
+  rename(
+    Rec_Nb = ...1,
+    Velocity_Partially_Retracted = Partially_Retracted,
+    Velocity_Fully_Retracted = Fully_Retracted
+  ) %>%
+  mutate(Rec_number = c(1, 2, 3, 4, 5))
+
+kruskal.test(Velocity_Partially_Retracted ~ Rec_number, data = PolypDeformation_data3)
+kruskal.test(Velocity_Fully_Retracted ~ Rec_number, data = PolypDeformation_data3)
+
+```

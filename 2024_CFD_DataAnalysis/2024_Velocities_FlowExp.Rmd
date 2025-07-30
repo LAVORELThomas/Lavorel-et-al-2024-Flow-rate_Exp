@@ -1,0 +1,173 @@
+---
+title: "2024_Velocities_FlowExp"
+author: "Thomas LAVOREL"
+date: "2024-05-14"
+output: html_document
+---
+
+# Importing libraries
+```{r}
+library(R.matlab)
+library(viridis)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(plotly)
+```
+
+# Importing data
+## Importing data from CFD simulation
+```{r}
+CFD_Velocity_data <- read_excel("2024_CFDVelocities_FlowExp.xlsx")
+
+CFD_Velocity_data$Length_Units <- as.numeric(CFD_Velocity_data$Length_Units)
+CFD_Velocity_data$Velocity_CFD <- as.numeric(CFD_Velocity_data$Velocity_CFD)
+CFD_Velocity_data$Length_Integer <- as.integer(CFD_Velocity_data$Length_Units)
+
+# Calculate the mean velocity for each integer length
+mean_velocities <- aggregate(Velocity_CFD ~ Length_Integer, data = CFD_Velocity_data, FUN = mean)
+mean_velocities$Length_Integer <- mean_velocities$Length_Integer*(-1)
+
+# Interpolate the values of the "Length_Unit" column to create an "iteration" column of 71 rows
+Iteration <- seq(min(CFD_Velocity_data$Length_Units), max(CFD_Velocity_data$Length_Units), length.out = 71)
+interpolated_values <- approx(x = CFD_Velocity_data$Length_Units, y = CFD_Velocity_data$Velocity_CFD, xout = Iteration)$y
+TheoricVelocity <- data.frame(Length = 71:1, Iteration = Iteration, Velocity_simulation = interpolated_values)
+```
+
+## Importing data from PIVLab
+```{r}
+Flume1 <- readMat("Flume1.mat")
+    
+Vel_Flume1 <- Flume1$mean.matrix %>% 
+  round(3)
+colnames(Vel_Flume1) <- LETTERS[1:7]  
+
+Flume2 <- readMat("Flume2.mat")
+Vel_Flume2 <- Flume2$mean.matrix %>% 
+  round(3)
+colnames(Vel_Flume2) <- LETTERS[1:7]  
+
+Flume3 <- readMat("Flume3.mat")
+Vel_Flume3 <- Flume3$mean.matrix %>% 
+  round(3)
+colnames(Vel_Flume3) <- LETTERS[1:7]  
+
+ncols <- ncol(Vel_Flume1)
+nrows <- nrow(Vel_Flume1)
+```
+
+# Data exploration
+```{r}
+Minimum_Flow_Flume1 <- min(Vel_Flume1)
+Minimum_Flow_Flume2 <- min(Vel_Flume2)
+Minimum_Flow_Flume3 <- min(Vel_Flume3)
+MeanMin_Flow <- mean(c(Minimum_Flow_Flume1, Minimum_Flow_Flume2, Minimum_Flow_Flume3))
+sdMin_Flow <- sd(c(Minimum_Flow_Flume1, Minimum_Flow_Flume2, Minimum_Flow_Flume3))
+
+
+Maximum_Flow_Flume1 <- max(Vel_Flume1)
+Maximum_Flow_Flume2 <- max(Vel_Flume2)
+Maximum_Flow_Flume3 <- max(Vel_Flume3)
+MeanMax_Flow <- mean(c(Maximum_Flow_Flume1, Maximum_Flow_Flume2, Maximum_Flow_Flume3))
+sdMax_Flow <- sd(c(Maximum_Flow_Flume1, Maximum_Flow_Flume2, Maximum_Flow_Flume3))
+
+MeanMin_Flow
+sdMin_Flow
+MeanMax_Flow
+sdMax_Flow
+```
+
+# Regression
+
+## Calculate the row means and add row numbers to the dataframe
+```{r}
+Velocity_mean_1 <- Vel_Flume1 %>%
+  rowMeans() %>%
+  data.frame() %>%
+  rename("Mean1" = ".") %>%
+  mutate(Length = 1:nrow(.))
+
+
+Velocity_mean_2 <- Vel_Flume2 %>%
+  rowMeans() %>%
+  data.frame() %>%
+  rename("Mean2" = ".") %>%
+  mutate(Length = 1:nrow(.))
+
+Velocity_mean_3 <- Vel_Flume3 %>%
+  rowMeans() %>%
+  data.frame() %>%
+  rename("Mean3" = ".") %>%
+  mutate(Length = 1:nrow(.))
+```
+
+## Fit a linear regression model
+```{r}
+model_1 <- lm(Mean1 ~ Length, data = Velocity_mean_1)
+model_2 <- lm(Mean2 ~ Length, data = Velocity_mean_2)
+model_3 <- lm(Mean3 ~ Length, data = Velocity_mean_3)
+
+model_CFD <- lm(Velocity_simulation~ Length, data = TheoricVelocity)
+
+summary(model_1)
+summary(model_2)
+summary(model_3)
+summary(model_CFD)
+```
+# Plot
+```{r}
+# Base plot
+plot(TheoricVelocity$Length, TheoricVelocity$Velocity_simulation, 
+     main = "Mean Velocity Comparison", 
+     xlab = "PIVLab Iteration following the length of the flumes", 
+     ylab = "Mean Velocity (cm/s)", 
+     col = "#A42119", 
+     pch = 21, 
+     cex = 1.5,  # Increase point size
+     ylim = range(c(Velocity_mean_1$Mean1, Velocity_mean_2$Mean2, Velocity_mean_3$Mean3, TheoricVelocity$Velocity_simulation))
+)
+
+# Add points for Vel_Flume2 and Vel_Flume3 with increased point size
+points(Velocity_mean_1$Length, Velocity_mean_1$Mean1, col = "#B284BF", pch = 20, cex = 1.5)
+points(Velocity_mean_2$Length, Velocity_mean_2$Mean2, col = "#CAB77E", pch = 20, cex = 1.5)
+points(Velocity_mean_3$Length, Velocity_mean_3$Mean3, col = "#35978f", pch = 20, cex = 1.5)
+
+# Add legend with improved colors and formatting
+legend("bottomright", legend = c("CFD Simulation","Flume 1", "Flume 2", "Flume 3"), 
+       col = c("#A42119","#B284BF", "#CAB77E", "#35978f"), 
+       pch = c(21,20, 20, 20), 
+       lty = 1, 
+       cex = 0.8,  # Adjust text size
+       bty = "n")  # Remove legend box
+
+# Function to add regression lines and display regression info
+add_regression_info <- function(model, col, offset = 0) {
+  abline(model, col = col, lwd = 2)  # Increase line width
+  
+  # Extract coefficients, R-squared, and p-value
+  coef_a <- coef(model)[2]
+  coef_b <- coef(model)[1]
+  rsquared <- summary(model)$r.squared
+  p_value <- 2e-16  # Assuming this is the correct p-value for all models
+  
+  # Display regression equation
+  text(6, 25 - offset, 
+       substitute(paste("y = ", a, " * x + ", b), 
+                  list(a = format(coef_a, digits = 2), b = format(coef_b, digits = 2))), 
+       col = col, 
+       cex = 0.8)  # Adjust text size
+  
+  # Display R-squared and p-value
+  text(4, 24 - offset, 
+       paste("R^2 =", round(rsquared, 3)), 
+       col = col, 
+       cex = 0.8)  # Adjust text size
+}
+
+# Add regression info for each model with adjusted offsets for clarity
+add_regression_info(model_1, "#B284BF")
+add_regression_info(model_2, "#CAB77E", offset = 3)
+add_regression_info(model_3, "#35978f", offset = 6)
+add_regression_info(model_CFD, "#A42119", offset = 9)
+
+```
