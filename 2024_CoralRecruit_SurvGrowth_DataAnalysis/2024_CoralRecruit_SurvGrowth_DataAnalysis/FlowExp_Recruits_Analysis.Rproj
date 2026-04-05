@@ -1,0 +1,16 @@
+Version: 1.0
+ProjectId: 20a6b1fb-b7f4-4296-b0de-47227d9be1b0
+
+RestoreWorkspace: Default
+SaveWorkspace: Default
+AlwaysSaveHistory: Default
+
+EnableCodeIndexing: Yes
+UseSpacesForTab: Yes
+NumSpacesForTab: 2
+Encoding: UTF-8
+
+RnwWeave: Sweave
+LaTeX: pdfLaTeX
+
+ProjectName: 2024_FlowExp
